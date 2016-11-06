@@ -14,7 +14,7 @@ class EEPROMvariables {
    public:
 	uint8_t CANdo;        //Use SERIAL port if 2, CAN0 if 0 or CAN1 if 1
 	char logfile[80];
-        uint16_t transmitime;
+        uint32_t transmitime;
         boolean logger;
         uint32_t datarate;
         uint8_t goodEEPROM;
@@ -22,14 +22,15 @@ class EEPROMvariables {
 };
 
 EEPROMvariables myVars;
-uint16_t page=200;
+uint16_t page=300;
 uint16_t dummy;
 char cmdBuffer[100];
 char logstring[200];
 char msgBuff[100];
-float Version=1.10;
+float Version=1.20;
 int ptrBuffer;
 short logcycle=0;
+int logcycleflush=0;
 unsigned long elapsedtime, timestamp,startime, lastime;  //Variables to compare millis for timers
 boolean handlingEvent;
 boolean debug=1;
@@ -52,14 +53,14 @@ void setup() {
     EEPROM.read(page, myVars);
     if (myVars.goodEEPROM!=200)defaults();
     myVars.logger=false; 
-    lastime=startime=timestamp=millis();  //Zero our timers
+    lastime=startime=timestamp=micros();  //Zero our timers
     if(myVars.CANdo==0) initializeCAN(0); //If CANdo is 0, initialize CAN0 
     if(myVars.CANdo==1) initializeCAN(1);    //If CANdo is 1, initialize CAN1 
      if(myVars.CANdo==2)
        { 
         initializeCAN(0);    //If CANdo is 2, initialize both CAN1 and CAN2
-   	initializeCAN(1);    
-   	}        
+   	    initializeCAN(1);    
+        }        
     initializeMicroSD();
     Serial<<"\n\n Startup successful. EVTV Motor Werks -  CANDue Logger Version: "<<Version<<"\n\n";
     printMenu();
@@ -72,11 +73,11 @@ void setup() {
 
 void loop() 
 {
-    if(millis()-lastime > myVars.transmitime)  //If we reach our transmitime, send a frame and print status
+    if(micros()-lastime > myVars.transmitime)  //If we reach our transmitime, send a frame and print status
           {
-            lastime=millis();
-            if(myVars.outFrame.id>0)sendCAN(myVars.CANdo);
-            if(logcycle++ > 20) 
+            lastime=micros();
+            if(myVars.outFrame.id>0)sendCAN(myVars.CANdo);   // RN
+            if(logcycle++ > 500) 
               {  
                EEPROM.write(page, myVars);
                 logcycle=0;
@@ -86,9 +87,12 @@ void loop()
                   }
                 else{nextsendframe=0;}
               } 
-          }     
-     
-     
+          } 
+     if(logcycleflush++ > 50000)
+     {   
+        logcycleflush=0;
+        FlushToFile();                   // RN
+     }
 }
 
 void serialEventRun(void) 
@@ -193,7 +197,7 @@ void handleConfigCmd() {
           Serial<<myVars.outFrame.id<<"  "<<myVars.outFrame.data.bytes[0]<<"\n";
           myVars.outFrame.extended=1;
 	} else if (cmdString == String("RATE") ) {
-		Serial<<"Setting CAN to send frame every: "<< newValue<<" msec\n\n";
+		Serial<<"Setting CAN to send frame every: "<< newValue<<" microsec\n\n";
 		myVars.transmitime = newValue-1;
         } else if (cmdString == String("KBPS") ) {
 		Serial<<"Setting CAN data rate to: "<< newValue<<" kbps\n\n";
@@ -417,15 +421,25 @@ void logToFile(char *logstring)
       
 }
 
+// RN
+void FlushToFile()
+{
+    if (myFile) 
+      {
+         myFile.flush();
+      }
+      else Serial<<"MicroSD file is not open... unable to flush...\n\n";
+}
+
 void handleFrame(CAN_FRAME *frame)
 
 {
 // Serial<<"Got one... \n";
  
-    int milliseconds = (int) (millis()/1) %1000 ;
-    int seconds = (int) (millis() / 1000) % 60 ;
-    int minutes = (int) ((millis() / (1000*60)) % 60);
-    int hours   = (int) ((millis() / (1000*60*60)) % 24);
+    int milliseconds = (int) (micros()/100) %10000 ;
+    int seconds = (int) (micros() / 1000000) % 60 ;
+    int minutes = (int) ((micros() / (1000000*60)) % 60);
+    int hours   = (int) ((micros() / (1000000*60*60)) % 24);
     
     //Serial<<"%03x"<<frame->id<<"\n";
   
@@ -448,8 +462,8 @@ void printMenu()
   Serial<<"  FILE=logfile.csv    sets the microSD file name to log to\n";
   Serial<<"  SEND=050 FF 10 01 CA 02 BB 01 77         send standard ID CAN frame - hexadecimal format\n";
   Serial<<"  SENDL=18FF30CC FF 10 01 CA 02 BB 01 77   send extended ID CAN frame - hexadecimal format\n";
-  Serial<<"  RATE=500   The frequency in milliseconds to send stored CAN message \n";
-  Serial<<"  KBPS=250   Change CAN bus data rate in kbps \n";
+  Serial<<"  RATE=500000   The frequency in microseconds to send stored CAN message \n";
+  Serial<<"  KBPS=500   Change CAN bus data rate in kbps : 0=deactivate \n";
   Serial<<"  MARK=Turned on Air Conditioner Here    - Copies string to log file as a marker\n";
   Serial<<"  P - prints current logfile to screen\n";
   Serial<<"  I - displays microSD card operating paramters\n";
@@ -465,14 +479,15 @@ void sendCAN(int which)
 
 {
 	
-        int milliseconds = (int) (millis()/1) %1000 ;
-        int seconds = (int) (millis() / 1000) % 60 ;
-        int minutes = (int) ((millis() / (1000*60)) % 60);
-        int hours   = (int) ((millis() / (1000*60*60)) % 24);
+        int milliseconds = (int) (micros()/100) %10000 ;
+        int seconds = (int) (micros() / 1000000) % 60 ;
+        int minutes = (int) ((micros() / (1000000*60)) % 60);
+        int hours   = (int) ((micros() / (1000000*60*60)) % 24);
         
         char buffer[140];
-    
-        sprintf(buffer,"Sent msgID 0x%03X; %02X; %02X; %02X; %02X; %02X; %02X; %02X; %02X  %02d:%02d:%02d.%03d \n", myVars.outFrame.id, 
+
+  
+        sprintf(buffer,"Sent msgID 0x%03X; %02X; %02X; %02X; %02X; %02X; %02X; %02X; %02X  %02d:%02d:%02d.%04d \n", myVars.outFrame.id, 
         myVars.outFrame.data.bytes[0], myVars.outFrame.data.bytes[1], myVars.outFrame.data.bytes[2], 
         myVars.outFrame.data.bytes[3], myVars.outFrame.data.bytes[4], myVars.outFrame.data.bytes[5], 
         myVars.outFrame.data.bytes[6], myVars.outFrame.data.bytes[7], hours, minutes, seconds, milliseconds);
@@ -583,8 +598,8 @@ void defaults()
   sprintf(myVars.logfile,"default.txt");
   Serial<<"Setting default logfile: "<<myVars.logfile<<"\n";
   myVars.CANdo=0; 
-  myVars.transmitime=500;  
-  myVars.logger=false;
+  myVars.transmitime=500000;    // RN Ajout d'un 0
+  myVars.logger=false;         // RN false --> true
   myVars.outFrame.length = 8;  // Data payload 8 bytes
   myVars.outFrame.rtr = 0;  // Data payload 8 bytes
   myVars.goodEEPROM=200;
